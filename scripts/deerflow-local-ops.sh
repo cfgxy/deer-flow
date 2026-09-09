@@ -1,16 +1,19 @@
 #!/usr/bin/env bash
 # DeerFlow 本地源码部署运维入口（RUYI-117）
 #
-# 用途：对 /home/guxy/srv/deerflow 这套「源码检出 + Docker Compose 生产栈」形态的
-# 本地部署做可重复的启停、重启、健康检查、日志归档与卸载。
+# 用途：对「源码检出 + Docker Compose 生产栈」形态的本地部署做可重复的启停、重启、
+# 健康检查、日志归档与卸载。
 #
 # 设计约束：
+#   - 部署目录从脚本自身位置推导（脚本所在检出的仓库根），因此脚本随部署目录的源码
+#     检出一起存在，不依赖任何外部开发 worktree 存续；
 #   - 只包装仓库既有入口（scripts/deploy.sh / docker compose），不新增部署逻辑；
 #   - 只操作 docker compose 项目 deer-flow 名下的容器与卷，不触碰其它容器；
-#   - 不接收、不打印任何凭据；凭据一律由部署目录下 gitignored 的 .env 注入。
+#   - 不接收、不打印任何凭据；凭据一律由部署目录下 gitignored 的 .env 注入；
+#     运维日志与本地凭据统一落在 gitignored 的 backend/.deer-flow/local-ops/。
 #
-# 用法：
-#   scripts/deerflow-local-ops.sh <command>
+# 用法（在部署目录内执行）：
+#   ./scripts/deerflow-local-ops.sh <command>
 #
 #   up        构建镜像并启动（首次部署 / 源码基线变更后使用）
 #   start     不重建，直接启动已有镜像（日常启动、重启恢复）
@@ -22,23 +25,31 @@
 #   uninstall 完整卸载：移除容器、数据卷、本部署构建的镜像（需二次确认）
 #
 # 环境变量：
-#   DEERFLOW_DEPLOY_DIR  部署目录，默认 /home/guxy/srv/deerflow
-#   DEERFLOW_URL         对外入口，默认 http://127.0.0.1:2026
+#   DEERFLOW_DEPLOY_DIR  部署目录，默认为脚本所在检出的仓库根
+#   DEERFLOW_URL         对外入口，默认按部署目录 .env 中的 PORT 推导
 
 set -euo pipefail
 
-DEPLOY_DIR="${DEERFLOW_DEPLOY_DIR:-/home/guxy/srv/deerflow}"
-URL="${DEERFLOW_URL:-http://127.0.0.1:2026}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DEPLOY_DIR="${DEERFLOW_DEPLOY_DIR:-$(dirname "$SCRIPT_DIR")}"
 COMPOSE_FILE="docker/docker-compose.yaml"
 PROJECT="deer-flow"
-LOG_DIR="${DEPLOY_DIR}/.local-ops/logs"
+# 运维日志落在 DEER_FLOW_HOME 之下：该目录被仓库 .gitignore 的 `.deer-flow/` 覆盖，
+# 与 SQLite 数据同属本地数据边界，不会进入 Git 候选提交。
+LOG_DIR="${DEPLOY_DIR}/backend/.deer-flow/local-ops/logs"
 
 die() { printf '错误：%s\n' "$*" >&2; exit 1; }
 info() { printf '\033[0;34m==> %s\033[0m\n' "$*"; }
 
 [ -d "$DEPLOY_DIR" ] || die "部署目录不存在：$DEPLOY_DIR"
+[ -f "${DEPLOY_DIR}/scripts/deploy.sh" ] || die "$DEPLOY_DIR 不是 DeerFlow 源码检出（缺少 scripts/deploy.sh）"
 [ -f "${DEPLOY_DIR}/config.yaml" ] || die "缺少 ${DEPLOY_DIR}/config.yaml（由 config.example.yaml 复制后按需修改，gitignored）"
 [ -f "${DEPLOY_DIR}/.env" ] || die "缺少 ${DEPLOY_DIR}/.env（由 .env.example 复制后注入本机凭据，gitignored）"
+
+# 入口地址跟随 .env 中的 PORT，避免改端口后探针指向失效地址
+_port="$(sed -nE 's/^[[:space:]]*(export[[:space:]]+)?PORT[[:space:]]*=[[:space:]]*([0-9]+).*/\2/p' "${DEPLOY_DIR}/.env" | tail -n 1)"
+URL="${DEERFLOW_URL:-http://127.0.0.1:${_port:-2026}}"
+
 mkdir -p "$LOG_DIR"
 
 cd "$DEPLOY_DIR"
@@ -103,8 +114,10 @@ cmd_uninstall() {
   2. 删除数据卷 ${PROJECT}_redis-data（Redis 数据不可恢复）
   3. 删除本部署构建的镜像 deer-flow-gateway / deer-flow-frontend
 
-不会删除：${DEPLOY_DIR} 目录本身、SQLite 数据库文件、config.yaml 与 .env。
+不会删除：${DEPLOY_DIR} 目录本身、SQLite 数据库文件、config.yaml、.env，
+以及 backend/.deer-flow/local-ops 下的运维日志与本地凭据。
 如需彻底清空，请在本命令完成后手动执行：
+  rm -rf ${DEPLOY_DIR}/backend/.deer-flow
   git worktree remove --force ${DEPLOY_DIR}
 
 EOF
@@ -126,7 +139,8 @@ case "${1:-}" in
   logs) cmd_logs ;;
   uninstall) cmd_uninstall ;;
   *)
-    sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'
+    # 打印文件头部的中文用法说明（首个空行结束的注释块）
+    sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'
     exit 1
     ;;
 esac
