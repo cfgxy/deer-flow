@@ -19,7 +19,7 @@
 
 ```mermaid
 flowchart LR
-  U[浏览器 127.0.0.1:2026] --> N[deer-flow-nginx]
+  U[浏览器 局域网/本机 IP:2026] --> N[deer-flow-nginx]
   N -->|/| F[deer-flow-frontend<br/>Next.js prod :3000]
   N -->|/api /health| G[deer-flow-gateway<br/>FastAPI + agent runtime :8001]
   G --> R[(deer-flow-redis)]
@@ -57,7 +57,7 @@ cd /home/guxy/srv/deerflow
 
 | 项 | 值 |
 | --- | --- |
-| 对外入口 | `http://127.0.0.1:2026`（仅 loopback，未暴露到局域网） |
+| 对外入口 | `http://<本机局域网 IP>:2026`（`.env` 的 `BIND_HOST=0.0.0.0`，已暴露到局域网，Owner 明确指令，风险自担；该栈无 TLS，DeerFlow agent 具备命令执行能力，仅限受信网络访问，见 `scripts/deploy.sh` 启动告警） |
 | 内部端口 | frontend 3000、gateway 8001、redis 6379（均不映射到宿主） |
 | 容器 | `deer-flow-nginx` / `deer-flow-gateway` / `deer-flow-frontend` / `deer-flow-redis` |
 | compose 项目名 | `deer-flow` |
@@ -162,6 +162,6 @@ cd /home/guxy/srv/deerflow && ./scripts/deerflow-local-ops.sh up   # 基线变�
 ## 10. 未覆盖项
 
 - 无开机自启（systemd unit）配置。
-- 未配置 HTTPS / 对外暴露；仅 loopback 访问。
+- 未配置 HTTPS；`BIND_HOST=0.0.0.0` 已暴露到局域网（RUYI-181），无 TLS/认证前置。
 - 未做备份定时任务与日志轮转。
 - Sandbox 使用默认 `LocalSandboxProvider`（`allow_host_bash: false`），未启用 Docker-outside-of-Docker。

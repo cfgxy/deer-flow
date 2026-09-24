@@ -39,7 +39,7 @@ http {
     }
 
     upstream frontend {
-        server 127.0.0.1:3000;
+        server 127.0.0.1:__DEERFLOW_FRONTEND_PORT__;
     }
 
     # Only mark frontend requests as connection upgrades when the browser

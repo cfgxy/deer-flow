@@ -1,5 +1,7 @@
 # DeerFlow docker image cache
 docker/.cache/
+# Generated from docker/nginx/nginx.local.conf.template (RUYI-181)
+docker/nginx/nginx.local.conf
 # oh-my-claudecode state
 .omc/
 # OS generated files
