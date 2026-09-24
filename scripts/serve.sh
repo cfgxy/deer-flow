@@ -39,19 +39,11 @@ if [ -f "$REPO_ROOT/.env" ]; then
     set +a
 fi
 
-# Frontend dev-server port. Configurable via DEERFLOW_FRONTEND_PORT (.env or
-# shell env) so a worktree can move off 3000 when another local service
-# (e.g. another app's frontend) already holds it. Defaults to 3000, matching
-# every other deer-flow worktree, so leaving it unset changes nothing.
-DEERFLOW_FRONTEND_PORT="${DEERFLOW_FRONTEND_PORT:-3000}"
-export DEERFLOW_FRONTEND_PORT
-bash "$REPO_ROOT/scripts/render-nginx-conf.sh"
-
 _pick_python() {
     local candidate
     for candidate in python3 python py; do
         # Probe through `env` as well: the frontend is launched as
-        # `env PORT=$DEERFLOW_FRONTEND_PORT "$DEERFLOW_PNPM_PYTHON" ...` (FRONTEND_CMD below), and on
+        # `env PORT=3000 "$DEERFLOW_PNPM_PYTHON" ...` (FRONTEND_CMD below), and on
         # Windows/Git Bash the Microsoft Store python aliases under WindowsApps
         # are skipped by Bash's own PATH lookup yet still resolved (and fail to
         # exec) inside /usr/bin/env. A bare "$candidate" probe passes while the
@@ -93,9 +85,8 @@ done
 
 # ── Stop helper ──────────────────────────────────────────────────────────────
 
-# Every deer-flow worktree (the main checkout + each linked worktree) defaults
-# to the same dev ports (8001/3000/2026, frontend overridable via
-# DEERFLOW_FRONTEND_PORT), so a service started from ANY of them
+# Every deer-flow worktree (the main checkout + each linked worktree) hardcodes
+# the same dev ports (8001/3000/2026), so a service started from ANY of them
 # must be reclaimable from here — otherwise `make stop`/`make dev` in this
 # worktree can neither kill nor take over a port held by a sibling worktree.
 # DEERFLOW_ROOTS is that set of roots; processes living outside all of them
@@ -140,7 +131,7 @@ _is_deerflow_pid() {
 # (or starting, which stops first) isn't silently killing someone else's run.
 _report_reclaimed_ports() {
     local port pid files root owner
-    for port in 8001 "$DEERFLOW_FRONTEND_PORT" 2026; do
+    for port in 8001 3000 2026; do
         for pid in $(lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null); do
             _is_deerflow_pid "$pid" || continue
             files=$(lsof -b -w -p "$pid" 2>/dev/null)
@@ -283,7 +274,7 @@ stop_all() {
     # not match by name still gets reclaimed — otherwise `make dev` fails its
     # nginx port preflight.
     _kill_repo_port 8001
-    _kill_repo_port "$DEERFLOW_FRONTEND_PORT"
+    _kill_repo_port 3000
     _kill_repo_port 2026
     bash ./scripts/cleanup-containers.sh deer-flow-sandbox 2>/dev/null || true
     echo "✓ All services stopped"
@@ -335,15 +326,15 @@ export DEERFLOW_PNPM_PYTHON DEERFLOW_PNPM_RUNNER
 
 # Frontend command
 if $DEV_MODE; then
-    FRONTEND_CMD="env PORT=$DEERFLOW_FRONTEND_PORT \"\$DEERFLOW_PNPM_PYTHON\" \"\$DEERFLOW_PNPM_RUNNER\" run dev"
+    FRONTEND_CMD='env PORT=3000 "$DEERFLOW_PNPM_PYTHON" "$DEERFLOW_PNPM_RUNNER" run dev'
     if $SKIP_FRONTEND_BUILD; then
         echo "  Note: --skip-frontend-build is ignored in dev mode (next dev does not build)."
     fi
 elif $SKIP_FRONTEND_BUILD; then
     # The BUILD_ID preflight above already guarantees a reusable build exists.
-    FRONTEND_CMD="env PORT=$DEERFLOW_FRONTEND_PORT BETTER_AUTH_SECRET=$($DEERFLOW_PNPM_PYTHON -c 'import secrets; print(secrets.token_hex(16))') \"\$DEERFLOW_PNPM_PYTHON\" \"\$DEERFLOW_PNPM_RUNNER\" run start"
+    FRONTEND_CMD="env PORT=3000 BETTER_AUTH_SECRET=$($DEERFLOW_PNPM_PYTHON -c 'import secrets; print(secrets.token_hex(16))') \"\$DEERFLOW_PNPM_PYTHON\" \"\$DEERFLOW_PNPM_RUNNER\" run start"
 else
-    FRONTEND_CMD="env PORT=$DEERFLOW_FRONTEND_PORT BETTER_AUTH_SECRET=$($DEERFLOW_PNPM_PYTHON -c 'import secrets; print(secrets.token_hex(16))') \"\$DEERFLOW_PNPM_PYTHON\" \"\$DEERFLOW_PNPM_RUNNER\" run preview"
+    FRONTEND_CMD="env PORT=3000 BETTER_AUTH_SECRET=$($DEERFLOW_PNPM_PYTHON -c 'import secrets; print(secrets.token_hex(16))') \"\$DEERFLOW_PNPM_PYTHON\" \"\$DEERFLOW_PNPM_RUNNER\" run preview"
 fi
 
 # Runtime path defaults. Local `make dev` launches Gateway from `backend/`,
@@ -448,7 +439,7 @@ fi
 echo ""
 echo "  Services:"
 echo "    Gateway     → localhost:8001  (REST API + agent runtime)"
-echo "    Frontend    → localhost:$DEERFLOW_FRONTEND_PORT  (Next.js)"
+echo "    Frontend    → localhost:3000  (Next.js)"
 echo "    Nginx       → localhost:2026  (reverse proxy)"
 echo ""
 
@@ -510,7 +501,7 @@ run_service "Gateway" \
 # 2. Frontend
 run_service "Frontend" \
     "cd frontend && $FRONTEND_CMD > ../logs/frontend.log 2>&1" \
-    "$DEERFLOW_FRONTEND_PORT" 300
+    3000 300
 
 # 3. Nginx
 run_service "Nginx" \
