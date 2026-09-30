@@ -59,6 +59,7 @@ from deerflow.runtime.checkpoint_mode import (
     inject_checkpoint_mode,
 )
 from deerflow.runtime.goal import DEFAULT_MAX_GOAL_CONTINUATIONS, build_goal_state, goal_thread_lock, read_thread_goal, write_thread_goal
+from deerflow.runtime.secret_context import DIRECT_ENV_SECRETS_CONTEXT_KEY, coerce_secret_pairs
 from deerflow.runtime.user_context import get_effective_user_id
 from deerflow.skills.describe import build_skill_search_setup
 from deerflow.skills.storage import get_or_new_user_skill_storage
@@ -849,7 +850,10 @@ class DeerFlowClient:
             **kwargs: Override client defaults (model_name, thinking_enabled,
                 plan_mode, subagent_enabled, recursion_limit). Trusted embedded
                 callers may also provide user_id, user_role, oauth_provider,
-                oauth_id, channel_user_id, is_internal, and authz_attributes.
+                oauth_id, channel_user_id, is_internal, authz_attributes, and
+                ``direct_env_secrets`` (a name->value mapping injected into
+                sandbox subprocess envs without skill declaration; see
+                ``deerflow.runtime.secret_context``).
 
         Yields:
             StreamEvent with one of:
@@ -901,6 +905,12 @@ class DeerFlowClient:
         for key in _EMBEDDED_AUTHORIZATION_CONTEXT_KEYS:
             if key in kwargs:
                 context[key] = kwargs[key]
+
+        # Caller-directed env-injection secrets (trusted embedded callers only;
+        # see ``deerflow.runtime.secret_context`` for the carrier contract).
+        direct_env_secrets = coerce_secret_pairs(kwargs.get("direct_env_secrets"))
+        if direct_env_secrets:
+            context[DIRECT_ENV_SECRETS_CONTEXT_KEY] = direct_env_secrets
 
         configurable = config.get("configurable") or {}
         deerflow_trace_id = ensure_trace_id()
