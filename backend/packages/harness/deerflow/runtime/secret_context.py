@@ -6,10 +6,20 @@ the executed command string; it is injected as an environment variable into a
 skill's sandbox subprocess only when an activated skill declares it via the
 ``required-secrets`` frontmatter field.
 
-This module centralises the reserved key name and safe extraction so the carrier
-contract lives in one place, consumed by the skill-activation middleware (to
-build the per-turn injection set) and the tracing redactor (to strip it from
-trace payloads).
+Embedded callers with no skill in the loop (e.g. protocol bridges driving
+``DeerFlowClient``) use the second channel: the trusted-embedded
+``direct_env_secrets`` kwarg on ``client.stream()`` lands in the reserved
+``__direct_env_secrets`` run-context key, and the bash tool injects it into the
+sandbox subprocess env verbatim — same request-boundary trust level as
+``context.secrets``, but without the skill-declaration gate. HTTP/gateway
+callers cannot seed the key: dunder-prefixed context keys are stripped at the
+gateway boundary, so the kwarg is the only writer.
+
+This module centralises the reserved key names and safe extraction so the
+carrier contract lives in one place, consumed by the skill-activation
+middleware (to build the per-turn injection set), the embedded client entry
+(the direct channel), and the tracing redactor (to strip them from trace
+payloads).
 """
 
 from __future__ import annotations
@@ -26,6 +36,14 @@ SECRETS_CONTEXT_KEY = "secrets"
 # (binding point A). Written by the skill-activation middleware, read by the bash
 # tool. Both reserved keys are stripped from trace payloads (see tracing redactor).
 ACTIVE_SECRETS_CONTEXT_KEY = "__active_skill_secrets"
+
+# Reserved sub-key holding caller-directed request-scoped secrets that the bash
+# tool injects into the sandbox subprocess env verbatim, with no skill in the
+# loop. Written only by the embedded client entry (the ``direct_env_secrets``
+# kwarg on ``client.stream()``); the gateway strips dunder-prefixed context
+# keys, so an HTTP caller cannot seed it. Like ``secrets``, values come from
+# the request — never from the host environment.
+DIRECT_ENV_SECRETS_CONTEXT_KEY = "__direct_env_secrets"
 
 # Reserved sub-key holding the active skill tool-policy decision for one model
 # step. The decision includes a middleware-instance owner token that prevents a
@@ -53,7 +71,12 @@ def redact_metadata_secrets(metadata: Any) -> Any:
     return {key: value for key, value in metadata.items() if key != LEGACY_AUTH_TOKEN_METADATA_KEY}
 
 
-def _string_pairs(raw: Any) -> dict[str, str]:
+def coerce_secret_pairs(raw: Any) -> dict[str, str]:
+    """Keep only string-keyed, string-valued entries of a secrets mapping.
+
+    Anything else is ignored so a malformed carrier can never crash secret
+    resolution or injection.
+    """
     if not isinstance(raw, dict):
         return {}
     return {key: value for key, value in raw.items() if isinstance(key, str) and isinstance(value, str)}
@@ -67,7 +90,7 @@ def extract_request_secrets(context: Any) -> dict[str, str]:
     """
     if not isinstance(context, dict):
         return {}
-    return _string_pairs(context.get(SECRETS_CONTEXT_KEY))
+    return coerce_secret_pairs(context.get(SECRETS_CONTEXT_KEY))
 
 
 def read_active_secrets(context: Any) -> dict[str, str]:
@@ -75,7 +98,15 @@ def read_active_secrets(context: Any) -> dict[str, str]:
     set), or ``{}``. Read by the bash tool to build the subprocess env."""
     if not isinstance(context, dict):
         return {}
-    return _string_pairs(context.get(ACTIVE_SECRETS_CONTEXT_KEY))
+    return coerce_secret_pairs(context.get(ACTIVE_SECRETS_CONTEXT_KEY))
+
+
+def read_direct_env_secrets(context: Any) -> dict[str, str]:
+    """Return the caller-directed env-injection secrets (the direct channel),
+    or ``{}``. Read by the bash tool to build the subprocess env."""
+    if not isinstance(context, dict):
+        return {}
+    return coerce_secret_pairs(context.get(DIRECT_ENV_SECRETS_CONTEXT_KEY))
 
 
 def write_slash_skill_source_path(context: Any, path: str, *, owner_token: str) -> None:
@@ -104,10 +135,10 @@ def read_slash_skill_source_path(context: Any, *, owner_token: str) -> str | Non
 
 
 # Private run-context keys the skill-activation middleware uses to carry secret
-# bindings across a run. Only ``secrets`` / ``__active_skill_secrets`` hold
-# secret values; the slash source holds a middleware-chain owner token, while
-# the audit keys hold names only. All are listed so the redaction allowlist
-# remains a complete guard.
+# bindings across a run. Only ``secrets`` / ``__active_skill_secrets`` /
+# ``__direct_env_secrets`` hold secret values; the slash source holds a
+# middleware-chain owner token, while the audit keys hold names only. All are
+# listed so the redaction allowlist remains a complete guard.
 _SLASH_SECRET_SOURCE_KEY = "__slash_skill_secret_source"
 _SECRETS_BINDING_AUDIT_KEY = "__skill_secrets_binding_audit"
 
@@ -127,6 +158,7 @@ REDACTED_CONTEXT_KEYS = frozenset(
     {
         SECRETS_CONTEXT_KEY,
         ACTIVE_SECRETS_CONTEXT_KEY,
+        DIRECT_ENV_SECRETS_CONTEXT_KEY,
         _SLASH_SECRET_SOURCE_KEY,
         _SECRETS_BINDING_AUDIT_KEY,
         _SLASH_SKILL_ACTIVATION_RUN_KEY,

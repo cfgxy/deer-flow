@@ -24,7 +24,7 @@ from deerflow.authz.sandbox_authz import (
 from deerflow.config import get_app_config
 from deerflow.config.paths import VIRTUAL_PATH_PREFIX
 from deerflow.constants import DEFAULT_SKILLS_CONTAINER_PATH
-from deerflow.runtime.secret_context import read_active_secrets
+from deerflow.runtime.secret_context import read_active_secrets, read_direct_env_secrets
 from deerflow.runtime.user_context import resolve_runtime_user_id
 from deerflow.sandbox.exceptions import (
     SandboxError,
@@ -2030,9 +2030,16 @@ def bash_tool(runtime: Runtime, command: str, description: str = "") -> str:
         sandbox = ensure_sandbox_initialized(runtime)
         # Request-scoped secrets resolved for the active skill (#3861), plus a
         # short-lived GitHub App installation token threaded through by the
-        # GitHub channel. Both are injected as per-call env into the subprocess,
-        # never placed in the command string.
-        injected_env = read_active_secrets(getattr(runtime, "context", None)) or None
+        # GitHub channel, plus caller-directed env-injection secrets from the
+        # embedded direct channel (no skill in the loop). All are injected as
+        # per-call env into the subprocess, never placed in the command string.
+        # On a name collision the skill-resolved binding wins: it is the
+        # middleware's per-call recomputed decision for the active skill.
+        context = getattr(runtime, "context", None)
+        injected_env = read_active_secrets(context) or None
+        direct_env = read_direct_env_secrets(context)
+        if direct_env:
+            injected_env = {**direct_env, **(injected_env or {})}
         identity_prefix = _channel_identity_prefix(runtime)
         github_env = _github_env_from_runtime(runtime)
         lark_cli_env = _lark_cli_env_from_runtime(runtime, command, sandbox_paths=not is_local_sandbox(runtime))
